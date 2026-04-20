@@ -16,12 +16,17 @@ Brief Overview: Multiple ESP32-C3 nodes that connect to a central raspberry pi c
 - Addressable RGB LED
   - This one is optional, but could show another output if we want.
 
+### API
+
+The API documentation can be [found here](docs/API.md).
+
 ## Table of Contents
 
 - [cse525-final](#cse525-final)
   - [Hardware](#hardware)
     - [Sensors/Inputs](#sensorsinputs)
     - [Outputs](#outputs)
+    - [API](#API)
   - [Table of Contents](#table-of-contents)
   - [Project Structure](#project-structure)
   - [Project Setup](#project-setup)
