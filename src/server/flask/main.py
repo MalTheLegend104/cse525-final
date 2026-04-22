@@ -94,11 +94,6 @@ app = Flask(__name__)
 #     }
 # }
 
-from flask import Flask, request, jsonify
-
-app = Flask(__name__)
-
-
 @app.route("/handshake", methods=["POST"])
 def handshake():
     """
