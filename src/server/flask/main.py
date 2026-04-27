@@ -1,98 +1,36 @@
 from flask import Flask, request, jsonify, render_template_string
 import uuid
+import json
+import os
 
 app = Flask(__name__)
 
-# This is a basic outline of the API.
-#
-# The client will send a packet with the following info:
-# {
-#     "hw_id" : "<MAC ADDR>",
-#     "functions" : [
-#         "temperature",
-#         "control",
-#         "motion",
-#         "open/close",
-#         "etc."
-#     ]
-# }
-#
-# The response will be in the form:
-# {
-#     "uuid" : "<generated uuid>",
-#     "functions" : {
-#         "temperature" : "<temp uuid>",
-#         "control" : "<control uuid>",
-#         "etc." : ""
-#     }
-# }
-# The client is expected to use these UUIDs in all future communications.
-#
-# After successfully "authenticating":
-#
-# The client will send packets to `/update` with this format:
-#
-# {
-#     "hw_uuid" : "<hw_uuid>",
-#     "func_uuid" : "<func_uuid>",
-#     "data" : {
-#         "any data provided by the sensor"
-#     }
-# }
-# If the node has more than one function, they will be sent as separate packets.
-# This lets the update times for each function be different if desired.
-#
-# If the server cannot find either the hw_uuid or func_uuid in its registry, it will return HTTP 401.
-# If the server cannot parse the data contained, it will return HTTP 400.
-# If the server got the data and can use it, it will return HTTP 200.
-#
-# If the response is 401, it is expected that the client go through the /handshake endpoint again to refresh credentials
-#
-# If the client supports control functions, it is expected to poll the /control endpoint.
-# The server will respond with the current control status from the webserver.
-# If the server does not respond, it is expected that the client hold it's current state.
-# The client control packet to the server should be in this form:
-# {
-#     "hw_uuid" : "",
-#     "func_uuid": "",
-#     "state" : {
-#         "any relevant data for the specific control function"
-#     }
-# }
-#
-# The server will respond with basically the same packet.
-# Any changes in this are expected to be changed on the client.
-# {
-#     "hw_uuid" : "",
-#     "func_uuid": "",
-#     "state" : {
-#         "any relevant data for the specific control function"
-#     }
-# }
-#
-# If there is no change, the server is to echo the packet. It will be identical to what was sent.
-# The client is expected to blindly follow the state provided by the server.
-# It will only discard it if the server request is impossible or incorrect.
-#
-# The client can respond with HTTP 400 if the request is invalid, HTTP 401 it the UUIDs do not match, or HTTP 200 if accepted.
-#
-# For example, say we have a client that controls an LED. The client would poll the server with this packet:
-# {
-#     "hw_uuid" : "<hw_uuid>",
-#     "func_uuid" : "<func_uuid>",
-#     "state" : {
-#         "led" : "off"
-#     }
-# }
-#
-# Say the server (via request from the webserver) wants to turn the LED on, it would respond with:
-# {
-#     "hw_uuid" : "<hw_uuid>",
-#     "func_uuid" : "<func_uuid>",
-#     "state" : {
-#         "led" : "on"
-#     }
-# }
+# This is where we store the UUID mappings for consistent UUIDs across runs
+REGISTRY_FILE = "device_registry.json"
+
+# { hw_uuid: { "hw_id": str, "functions": { func_name: func_uuid } } }
+devices = {}
+
+# { func_uuid: hw_uuid }
+func_to_device = {}
+
+# { func_uuid: state_dict }
+desired_states = {}
+
+# { func_uuid: state_dict }
+sensor_data = {}
+hw_id_registry = {}
+
+# loads the registry from the file if it exists
+def load_registry():
+    if os.path.exists(REGISTRY_FILE):
+        with open(REGISTRY_FILE, "r") as f:
+            hw_id_registry = json.load(f)
+
+# dumps the registry to the file
+def save_registry():
+    with open(REGISTRY_FILE, "w") as f:
+        json.dump(hw_id_registry, f, indent=2)
 
 @app.route("/handshake", methods=["POST"])
 def handshake():
@@ -118,7 +56,41 @@ def handshake():
         200 on success
         400 on malformed request
     """
-    pass
+    # make sure we have the hw_id and the functions the node provides
+    data = request.get_json(silent=True)
+    if not data or "hw_id" not in data or "functions" not in data:
+        return jsonify({"error": "malformed request"}), 400
+
+    hw_id = data["hw_id"]
+    functions = data["functions"]
+
+    if not isinstance(functions, list) or not all(isinstance(f, str) for f in functions):
+        return jsonify({"error": "malformed request"}), 400
+
+    # Reuse existing hw_uuid for this hw_id if we've seen it before
+    if hw_id in hw_id_registry:
+        hw_uuid = hw_id_registry[hw_id]
+    else:
+        hw_uuid = str(uuid.uuid4())
+        hw_id_registry[hw_id] = hw_uuid
+        save_registry()
+
+    # Give each node "function" it's own UUID
+    func_map = {}
+    for func_name in functions:
+        func_uuid = str(uuid.uuid4())
+        func_map[func_name] = func_uuid
+        func_to_device[func_uuid] = hw_uuid
+
+    devices[hw_uuid] = {
+        "hw_id": hw_id,
+        "functions": func_map,
+    }
+
+    return jsonify({
+        "uuid": hw_uuid,
+        "functions": func_map,
+    }), 200
 
 
 @app.route("/update", methods=["POST"])
@@ -143,7 +115,26 @@ def update():
         400 if payload is malformed
         401 if UUIDs are invalid (client should re-handshake)
     """
-    pass
+    # Make sure we actually got data from the endpoint
+    data = request.get_json(silent=True)
+    if not data or "hw_uuid" not in data or "func_uuid" not in data or "data" not in data:
+        return jsonify({"error": "malformed request"}), 400
+
+    hw_uuid = data["hw_uuid"]
+    func_uuid = data["func_uuid"]
+    payload = data["data"]
+
+    if hw_uuid not in devices:
+        return jsonify({"error": "unknown uuid"}), 401
+
+    if func_uuid not in func_to_device or func_to_device[func_uuid] != hw_uuid:
+        return jsonify({"error": "unknown uuid"}), 401
+
+    # Internal store of the data
+    # This will be changed once I see what the frontend expects
+    sensor_data[func_uuid] = payload
+
+    return jsonify({}), 200
 
 
 @app.route("/control", methods=["POST"])
@@ -176,7 +167,29 @@ def control():
         400 if payload is malformed
         401 if UUIDs are invalid
     """
-    pass
+    # Make sure all information required is here
+    data = request.get_json(silent=True)
+    if not data or "hw_uuid" not in data or "func_uuid" not in data or "state" not in data:
+        return jsonify({"error": "malformed request"}), 400
+
+    hw_uuid = data["hw_uuid"]
+    func_uuid = data["func_uuid"]
+    client_state = data["state"]
+
+    if hw_uuid not in devices:
+        return jsonify({"error": "unknown uuid"}), 401
+
+    if func_uuid not in func_to_device or func_to_device[func_uuid] != hw_uuid:
+        return jsonify({"error": "unknown uuid"}), 401
+
+    # Get the currently stored desired state as stored
+    target_state = desired_states.get(func_uuid, client_state)
+
+    return jsonify({
+        "hw_uuid": hw_uuid,
+        "func_uuid": func_uuid,
+        "state": target_state,
+    }), 200
 
 
 @app.route("/internal/set_state", methods=["POST"])
@@ -201,7 +214,27 @@ def set_state():
         403 if request is not from localhost
         404 if func_uuid is not found
     """
-    pass
+    # Make sure it's localhost
+    if request.remote_addr != "127.0.0.1":
+        return jsonify({"error": "forbidden"}), 403
+
+    data = request.get_json(silent=True)
+    if not data or "func_uuid" not in data or "state" not in data:
+        return jsonify({"error": "missing or invalid fields"}), 400
+
+    func_uuid = data["func_uuid"]
+    state = data["state"]
+
+    if not isinstance(state, dict):
+        return jsonify({"error": "missing or invalid fields"}), 400
+
+    if func_uuid not in func_to_device:
+        return jsonify({"error": "func_uuid not found"}), 404
+
+    # Store the provided state
+    desired_states[func_uuid] = state
+
+    return jsonify({}), 200
 
 
 if __name__ == "__main__":
