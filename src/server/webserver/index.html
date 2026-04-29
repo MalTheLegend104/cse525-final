@@ -353,73 +353,116 @@
       const doorClosed = ref(true);         // door contact sensor
       const newSetpoint = ref('');
       const sliderSetpoint = ref(71.6);
-      
-      let autoTempInterval = null;           // interval for ambient temperature drift
 
-      // --- Light logic (replaces heating) ---
-      // Light turns ON when the room temperature is below the target setpoint (needs warming)
-      // This creates a smart "light assists heating" metaphor or simply aesthetic link.
-      const lightStatus = computed(() => currentTemp.value < setpoint.value);
-      
-      // Temperature difference for badge display
+      let pollInterval = null;
+
+      const tempFuncUuid = ref(null);
+      const controlFuncUuid = ref(null);
+      const lightFuncUuid = ref(null);
+      const lightStatus = ref(false)
+
       const difference = computed(() => currentTemp.value - setpoint.value);
       const diffClass = computed(() => {
         const d = difference.value;
-        if (d > 0.2) return 'positive';
-        if (d < -0.2) return 'negative';
-        return 'neutral';
+        if (d > 0.2) return 'diff-badge positive';
+        if (d < -0.2) return 'diff-badge negative';
+        return 'diff-badge neutral';
       });
 
+      // Get the UUIDs of all the nodes
+      async function discoverFunctions() {
+         const [tempRes, controlRes, lightRes] = await Promise.all([
+              fetch("/internal/get_device?function=temperature"),
+              fetch("/internal/get_device?function=control"),
+              fetch("/internal/get_device?function=light")
+          ]);
+          const lightData = await lightRes.json();
+          lightFuncUuid.value = lightData.func_uuid;
+
+          const tempData = await tempRes.json();
+          const controlData = await controlRes.json();
+          tempFuncUuid.value = tempData.func_uuid;
+          controlFuncUuid.value = controlData.func_uuid;
+      }
+
+      // --- Getters ---
+      async function fetchLightState() {
+          if (!lightFuncUuid.value) return;
+          const res = await fetch(`/internal/get_state?func_uuid=${lightFuncUuid.value}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.state.on !== undefined) lightStatus.value = data.state.on;
+      }
+
+      async function fetchSensorState() {
+          if (!tempFuncUuid.value) return;
+          const res = await fetch(`/internal/get_state?func_uuid=${tempFuncUuid.value}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.state.temperature !== undefined) currentTemp.value = data.state.temperature;
+          if (data.state.motion !== undefined) motionDetected.value = data.state.motion;
+          if (data.state.door_closed !== undefined) doorClosed.value = data.state.door_closed;
+      }
+
+      async function fetchDesiredState() {
+          if (!controlFuncUuid.value) return;
+          const res = await fetch(`/internal/get_state?func_uuid=${controlFuncUuid.value}`);
+          if (!res.ok) return;
+          const data = await res.json();
+          if (data.state.setpoint !== undefined) {
+              setpoint.value = data.state.setpoint;
+              sliderSetpoint.value = data.state.setpoint;
+          }
+      }
+
       // --- Setpoint management ---
-      function updateSetpoint() {
+      async function pushSetpoint() {
+          if (!controlFuncUuid.value) return;
+          await fetch("/internal/set_state", {
+              method: "POST",
+              headers: {"Content-Type": "application/json"},
+              body: JSON.stringify({
+                  func_uuid: controlFuncUuid.value,
+                  state: { setpoint: setpoint.value }
+              })
+          });
+      }
+
+       function updateSetpoint() {
         let val = parseFloat(newSetpoint.value);
         if (isNaN(val)) return;
         val = Math.min(95, Math.max(50, val));
         setpoint.value = val;
         sliderSetpoint.value = val;
         newSetpoint.value = '';
+        pushSetpoint();
       }
 
       function adjustSetpoint(delta) {
-        let newVal = setpoint.value + delta;
-        newVal = Math.min(95, Math.max(50, newVal));
-        setpoint.value = newVal;
-        sliderSetpoint.value = newVal;
+          let newVal = Math.min(95, Math.max(50, setpoint.value + delta));
+          setpoint.value = newVal;
+          sliderSetpoint.value = newVal;
+          pushSetpoint();
       }
 
       function syncFromSlider() {
-        let val = parseFloat(sliderSetpoint.value);
-        if (isNaN(val)) return;
-        val = Math.min(95, Math.max(50, val));
-        setpoint.value = val;
-      }
-
-      // --- Ambient temperature simulation (automatic drift)---
-      function startAmbientDrift() {
-        if (autoTempInterval) clearInterval(autoTempInterval);
-        autoTempInterval = setInterval(() => {
-          // random drift between -0.4°F and +0.4°F, realistic fluctuation
-          let change = (Math.random() - 0.5) * 0.8;   // -0.4 .. +0.4
-          let newTemp = currentTemp.value + change;
-          newTemp = Math.min(95, Math.max(40, newTemp));
-          currentTemp.value = newTemp;
-          
-          // Console logs to demonstrate light behavior (non-intrusive)
-          if (lightStatus.value) {
-            console.log(`💡 LIGHT ON | room: ${currentTemp.value.toFixed(1)}°F < target ${setpoint.value.toFixed(1)}°F`);
-          } else {
-            console.log(`⚫ LIGHT OFF | room: ${currentTemp.value.toFixed(1)}°F ≥ target ${setpoint.value.toFixed(1)}°F`);
-          }
-        }, 5500); // update every 5.5 seconds
+          let val = parseFloat(sliderSetpoint.value);
+          if (isNaN(val)) return;
+          setpoint.value = Math.min(95, Math.max(50, val));
+          pushSetpoint();
       }
 
       // --- Lifecycle ---
-      onMounted(() => {
-        startAmbientDrift();
+      onMounted(async () => {
+          await discoverFunctions();
+          await Promise.all([fetchSensorState(), fetchDesiredState(), fetchLightState()]);
+          pollInterval = setInterval(async () => {
+              await Promise.all([fetchSensorState(), fetchDesiredState(), fetchLightState()]);
+          }, 5500);
       });
 
       onUnmounted(() => {
-        if (autoTempInterval) clearInterval(autoTempInterval);
+          if (pollInterval) clearInterval(pollInterval);
       });
 
       return {
@@ -428,7 +471,7 @@
         setpoint,
         motionDetected,
         doorClosed,
-        lightStatus,          
+        lightStatus,
         difference,
         diffClass,
         newSetpoint,
@@ -441,5 +484,8 @@
     }
   }).mount('#app');
 </script>
+    </div>
+  </div>
+</div>
 </body>
 </html>

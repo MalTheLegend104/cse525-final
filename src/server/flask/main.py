@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, request, jsonify, render_template_string, send_file
 import uuid
 import json
 import os
@@ -31,6 +31,42 @@ def load_registry():
 def save_registry():
     with open(REGISTRY_FILE, "w") as f:
         json.dump(hw_id_registry, f, indent=2)
+
+@app.route("/")
+def index():
+    return send_file("../webserver/index.html")
+
+@app.route("/internal/get_device", methods=["GET"])
+def get_device():
+    func_name = request.args.get("function")
+    if not func_name:
+        return jsonify({"error": "missing function parameter"}), 400
+
+    for hw_uuid, device in devices.items():
+        if func_name in device["functions"]:
+            func_uuid = device["functions"][func_name]
+            return jsonify({
+                "hw_uuid": hw_uuid,
+                "func_uuid": func_uuid,
+            }), 200
+
+    return jsonify({"error": "function not found"}), 404
+
+
+@app.route("/internal/get_state", methods=["GET"])
+def get_state():
+    func_uuid = request.args.get("func_uuid")
+    if not func_uuid:
+        return jsonify({"error": "missing func_uuid parameter"}), 400
+
+    if func_uuid not in func_to_device:
+        return jsonify({"error": "func_uuid not found"}), 404
+
+    state = sensor_data.get(func_uuid) or desired_states.get(func_uuid)
+    if state is None:
+        return jsonify({"error": "no state available"}), 404
+
+    return jsonify({"func_uuid": func_uuid, "state": state}), 200
 
 @app.route("/handshake", methods=["POST"])
 def handshake():
