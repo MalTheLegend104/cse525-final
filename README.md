@@ -1,6 +1,8 @@
 # cse525-final
 
-Brief Overview: Multiple ESP32-C3 nodes that connect to a central raspberry pi controller node. Each node can control either one or several sensors/outputs.
+> Group 6: Malcolm Alexander, Brittney Garcia Camarillo, Ernest Harris, and Austyn Reichback
+
+Brief Overview: Multiple ESP32-C3 nodes that connect to a central Raspberry Pi controller node. Each node can control either one or several sensors/outputs.
 
 ## Hardware
 
