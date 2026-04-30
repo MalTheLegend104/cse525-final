@@ -19,10 +19,10 @@ desired_states = {}
 
 # { func_uuid: state_dict }
 sensor_data = {}
-hw_id_registry = {}
 
 # loads the registry from the file if it exists
 def load_registry():
+    global hw_id_registry
     if os.path.exists(REGISTRY_FILE):
         with open(REGISTRY_FILE, "r") as f:
             hw_id_registry = json.load(f)
@@ -251,8 +251,9 @@ def set_state():
         404 if func_uuid is not found
     """
     # Make sure it's localhost
-    if request.remote_addr != "127.0.0.1":
-        return jsonify({"error": "forbidden"}), 403
+    # This is a problem whenever the website is hosted on a device different than what is running the webserver
+    #if request.remote_addr != "127.0.0.1":
+    #    return jsonify({"error": "forbidden"}), 403
 
     data = request.get_json(silent=True)
     if not data or "func_uuid" not in data or "state" not in data:
@@ -274,4 +275,5 @@ def set_state():
 
 
 if __name__ == "__main__":
+    load_registry()
     app.run(debug=True)
