@@ -376,6 +376,13 @@
               fetch("/internal/get_device?function=control"),
               fetch("/internal/get_device?function=light")
           ]);
+          const motionRes = await fetch("/internal/get_device?function=motion");
+          const doorRes = await fetch("/internal/get_device?function=door");
+          const motionData = await motionRes.json();
+          const doorData = await doorRes.json();
+          motionFuncUuid.value = motionData.func_uuid;
+          doorFuncUuid.value = doorData.func_uuid;
+        
           const lightData = await lightRes.json();
           lightFuncUuid.value = lightData.func_uuid;
 
